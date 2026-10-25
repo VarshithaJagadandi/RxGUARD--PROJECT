@@ -1,0 +1,46 @@
+// Run: node tests/engine.test.js
+const fs = require('fs'), path = require('path');
+for (const f of ['data', 'engine']) eval(fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8'));
+const { analyze, parseText } = RX.engine;
+let fail = 0;
+const t = (name, ok) => { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (!ok) fail++; };
+const has = (r, a, b, sev) => r.findings.some(f => f.drugs.includes(a) && (!b || f.drugs.includes(b)) && (!sev || f.sev === sev));
+let r = analyze(parseText('Tab Warfarin 5mg OD\nTab Ecosprin 75mg OD\nDiclofenac 50 TDS'), {});
+t('warfarin+aspirin major', has(r, 'warfarin', 'aspirin', 'major'));
+t('warfarin+diclofenac major', has(r, 'warfarin', 'diclofenac', 'major'));
+t('aspirin+diclofenac moderate', has(r, 'aspirin', 'diclofenac', 'moderate'));
+r = analyze(parseText('Dolo 650 1-1-1\nAmoxicillin 500 TDS\nCetirizine 10 OD'), { age: 30 });
+t('clean prescription has no findings', r.findings.length === 0 && r.score === 100 && r.band === 'low');
+t('brand parse Dolo = paracetamol 1950/day', r.daily.paracetamol === 1950);
+r = analyze(parseText('Paracetamol 500 QID\nCrocin 500 BD'), {});
+t('duplicate brand detected + summed dose over max? (3000<4000 so only dup)', has(r, 'paracetamol', null, 'major') && r.findings.some(f => f.type === 'duplicate'));
+r = analyze(parseText('Paracetamol 500mg QID\nIbuprofen 400 TDS\nAspirin 300 BD'), { age: 4, weight: 16 });
+t('child paracetamol dose flagged', r.findings.some(f => f.type === 'dose' && f.drugs[0] === 'paracetamol'));
+t('child aspirin flagged', has(r, 'aspirin', null, 'major'));
+r = analyze(parseText('Enalapril 5 OD\nIbuprofen 400 TDS\nDoxycycline 100 BD'), { age: 27, conditions: ['pregnant'] });
+t('pregnant ACEi contraindicated', has(r, 'enalapril', null, 'contraindicated'));
+t('pregnant NSAID major', has(r, 'ibuprofen', null, 'major'));
+t('pregnant doxycycline major', has(r, 'doxycycline', null, 'major'));
+r = analyze(parseText('Amoxicillin 500 TDS'), { allergies: ['penicillin'] });
+t('penicillin allergy contraindicated', has(r, 'amoxicillin', null, 'contraindicated') && r.band !== 'low');
+r = analyze(parseText('Sildenafil 50 OD\nIsosorbide mononitrate 20 BD'), {});
+t('sildenafil+nitrate contraindicated', has(r, 'sildenafil', 'ismn', 'contraindicated'));
+r = analyze(parseText('Ibuprofen 400 TDS\nEnalapril 5 OD\nFurosemide 40 OD'), {});
+t('triple whammy', r.findings.some(f => f.drugs.length === 3));
+r = analyze(parseText('Azithromycin 500 OD\nOndansetron 4 TDS'), {});
+t('QT pair', has(r, 'azithromycin', 'ondansetron', 'major'));
+r = analyze(parseText('Rifampicin 450 OD\nMala-D 1 OD'), {});
+t('rifampicin+OCP', has(r, 'rifampicin', 'ocp', 'major'));
+r = analyze(parseText('Metoprolol 50 BD\nAsthalin 2 mg TDS'), { conditions: ['asthma'] });
+t('asthma beta-blocker major', has(r, 'metoprolol', null, 'major'));
+r = analyze(parseText('Zorbitol 10 OD\nParacetamol 650 TDS'), {});
+t('unknown drug tracked', r.unknown.length === 1 && r.recognized === 1);
+r = analyze(parseText('Paracetamol 1000 QID'), { conditions: ['liver'] });
+t('liver paracetamol cap', r.findings.some(f => f.type === 'dose' && f.dose.liver));
+r = analyze(parseText('Diazepam 5 HS'), { age: 72 });
+t('elderly benzo', has(r, 'diazepam', null, 'major'));
+r = analyze(parseText('Paracetamol 650 SOS'), {});
+t('SOS assumes 4/day = 2600', r.daily.paracetamol === 2600);
+{ const G = global; G.RX = G.RX || {}; try { require('../js/i18n.js'); require('../js/i18n.more.js'); } catch (e) {}
+  const L = (G.RX.i18n || {}).L; if (L) { const base = Object.keys(L.en); ['hi', 'te', 'ta'].forEach(l => t('i18n parity ' + l, base.every(k => k in L[l]))); } }
+process.exit(fail ? 1 : 0);
